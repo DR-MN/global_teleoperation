@@ -1,0 +1,7 @@
+# Core hardware-free slice needs NO third-party packages.
+# Install extras for production paths:
+#   pip install -e ".[dev]"      # tests + yaml config
+#   pip install -e ".[zenoh]"    # production Zenoh transport
+#   pip install -e ".[data]"     # Parquet/HDF5 recording
+#   pip install -e ".[api]"      # FastAPI signaling server
+pyyaml>=6.0

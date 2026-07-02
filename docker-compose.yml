@@ -1,0 +1,60 @@
+# Cloud layer + follower stack for the global teleoperation system.
+#
+#   docker compose up zenoh signaling          # cloud rendezvous layer
+#   docker compose up follower                 # follower node (sim arm + video)
+#
+# The leader runs on the operator's workstation (browser UI + leader bridge) and
+# connects to this cloud layer over the internet — it is intentionally not a
+# service here, since it lives on a different network per the spec.
+services:
+  # Zenoh router: rendezvous for NAT'd leader/follower control plane.
+  zenoh:
+    image: eclipse/zenoh:latest
+    command: ["-l", "tcp/0.0.0.0:7447"]
+    ports:
+      - "7447:7447"
+    restart: unless-stopped
+
+  # WebRTC signaling + session registry (cloud layer).
+  signaling:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.signaling
+    ports:
+      - "8080:8080"
+    environment:
+      STUN_URL: ${STUN_URL:-stun:stun.l.google.com:19302}
+      TURN_URL: ${TURN_URL:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
+    restart: unless-stopped
+
+  # Follower: ROS2 bridge + safety-checked controller + WebRTC video publisher.
+  follower:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.follower
+    depends_on:
+      - zenoh
+      - signaling
+    environment:
+      ZENOH_ENDPOINT: ${ZENOH_ENDPOINT:-tcp/zenoh:7447}
+      SIGNALING_URL: ${SIGNALING_URL:-ws://signaling:8080}
+      SESSION_ID: ${SESSION_ID:-default}
+    # Uncomment to pass through real cameras on a Jetson/Linux host:
+    # devices:
+    #   - "/dev/video0:/dev/video0"
+    #   - "/dev/video1:/dev/video1"
+    restart: unless-stopped
+
+  # Operator UI (Next.js). Point it at the signaling server.
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_SIGNALING_URL: ${PUBLIC_SIGNALING_URL:-ws://localhost:8080}
+    depends_on:
+      - signaling

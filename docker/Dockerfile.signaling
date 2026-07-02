@@ -1,0 +1,12 @@
+# Cloud-layer signaling server (FastAPI + WebSocket).
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir -e ".[api]"
+
+EXPOSE 8080
+# STUN/TURN are injected via env (no hardcoded infra).
+ENV STUN_URL=stun:stun.l.google.com:19302
+CMD ["uvicorn", "teleop.cloud.signaling_server:app", "--host", "0.0.0.0", "--port", "8080"]

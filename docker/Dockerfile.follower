@@ -1,0 +1,25 @@
+# Follower node: ROS2 Humble + teleop core + bridge + WebRTC video publisher.
+# Targets the Jetson Orin Nano in production; the ros:humble base also runs on
+# x86 for development.
+FROM ros:humble-ros-base
+
+SHELL ["/bin/bash", "-c"]
+WORKDIR /opt/teleop
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-pip ros-humble-sensor-msgs ros-humble-geometry-msgs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install the dependency-free core + transport/video extras.
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip3 install --no-cache-dir -e ".[zenoh,video,data]"
+
+# Build the ROS2 bridge package.
+COPY ros2_ws ./ros2_ws
+RUN source /opt/ros/humble/setup.bash && cd ros2_ws && colcon build
+
+COPY docker/entrypoint-follower.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["follower"]

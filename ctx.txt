@@ -1,0 +1,375 @@
+# GLOBAL LEADER-FOLLOWER TELEOPERATION SYSTEM SPECIFICATION
+
+Build a complete global teleoperation system for a 6DOF robotic arm.
+
+## Objective
+
+Implement a real-time leader-follower teleoperation platform where:
+
+* A leader arm is controlled by a human operator.
+* A follower arm mirrors the leader arm.
+* Leader and follower may be located anywhere in the world.
+* Leader and follower are NOT on the same local network.
+* The system must operate through the public internet.
+
+The platform must support future expansion to humanoid robots, mobile manipulators, imitation learning datasets, and vision-language-action systems.
+
+---
+
+# Hardware Configuration
+
+## Leader Station
+
+Components:
+
+* 6DOF Leader Arm
+* Control Computer
+* Display
+* Keyboard and Mouse
+
+Responsibilities:
+
+* Read leader arm joint states
+* Publish teleoperation commands
+* Display live video feeds
+* Display robot state and diagnostics
+
+---
+
+## Follower Station
+
+Components:
+
+* 6DOF Follower Arm
+* Parallel Gripper
+* Jetson Orin Nano
+* Global Camera
+* Wrist/Gripper Camera
+
+Responsibilities:
+
+* Receive teleoperation commands
+* Execute robot motion
+* Publish robot state
+* Stream camera feeds
+* Record demonstrations
+
+---
+
+# Network Architecture
+
+Leader and follower must communicate over the internet.
+
+Do not assume:
+
+* Shared LAN
+* Static IP addresses
+* Open ports
+* Direct peer-to-peer access
+
+Support:
+
+* NAT traversal
+* Dynamic networks
+* Connection recovery
+* Session restoration
+
+---
+
+# Communication Architecture
+
+## Robot Commands
+
+Transport:
+
+* ROS2
+* Zenoh
+
+Publish:
+
+* Joint positions
+* End-effector pose
+* Gripper commands
+
+Rate:
+
+50-100 Hz
+
+---
+
+## Robot Feedback
+
+Publish:
+
+* Joint states
+* End-effector state
+* Gripper state
+* Diagnostics
+* Telemetry
+
+Rate:
+
+50-100 Hz
+
+---
+
+## Video Streaming
+
+Transport:
+
+* WebRTC
+
+Camera Streams:
+
+### Global Camera
+
+Purpose:
+
+* Workspace awareness
+* Object observation
+* Human observation
+* Environment monitoring
+
+Target:
+
+* 1280×720
+* 30 FPS
+
+### Wrist Camera
+
+Purpose:
+
+* Grasping
+* Fine manipulation
+* Alignment
+* Precision tasks
+
+Target:
+
+* 640×480 or greater
+* 30 FPS
+
+---
+
+# Software Stack
+
+Operating System:
+
+* Ubuntu 22.04
+
+Robot Middleware:
+
+* ROS2 Humble
+
+Programming Languages:
+
+* Python
+* C++
+
+Networking:
+
+* Zenoh
+* WebRTC
+* WebSocket
+
+Frontend:
+
+* React
+* Next.js
+
+Backend:
+
+* FastAPI
+
+Deployment:
+
+* Docker
+* Docker Compose
+
+Version Control:
+
+* Git
+
+---
+
+# ROS2 Topics
+
+## Leader
+
+Publish:
+
+```text
+/leader/joint_states
+/leader/gripper
+/leader/end_effector_pose
+```
+
+Subscribe:
+
+```text
+/follower/joint_states
+/follower/status
+/follower/diagnostics
+```
+
+---
+
+## Follower
+
+Subscribe:
+
+```text
+/leader/joint_states
+/leader/gripper
+/leader/end_effector_pose
+```
+
+Publish:
+
+```text
+/follower/joint_states
+/follower/status
+/follower/diagnostics
+```
+
+---
+
+# Camera Topics
+
+Global Camera:
+
+```text
+/camera/global/image_raw
+```
+
+Wrist Camera:
+
+```text
+/camera/wrist/image_raw
+```
+
+---
+
+# Video Requirements
+
+Support:
+
+* Low latency streaming
+* Adaptive bitrate
+* Multiple simultaneous streams
+* Automatic reconnection
+
+Target Latency:
+
+* Less than 150 ms preferred
+* Less than 300 ms acceptable
+
+---
+
+# Safety System
+
+Implement:
+
+## Joint Limits
+
+* Soft limits
+* Hard limits
+
+## Workspace Limits
+
+Configurable operating volume.
+
+## Motion Validation
+
+Reject:
+
+* Invalid commands
+* Unsafe poses
+* Out-of-range targets
+
+## Emergency Stop
+
+Support:
+
+* Hardware stop
+* Software stop
+
+---
+
+# Failure Recovery
+
+Detect:
+
+* Camera failures
+* Robot communication failures
+* Network interruptions
+* Teleoperation disconnects
+
+On communication loss:
+
+1. Stop robot motion.
+2. Hold current pose.
+3. Disable command execution.
+4. Wait for reconnection.
+5. Resume safely after validation.
+
+---
+
+# Data Recording
+
+Record synchronized:
+
+* Joint states
+* End-effector pose
+* Gripper state
+* Global camera feed
+* Wrist camera feed
+* Timestamps
+
+Store in formats compatible with:
+
+* LeRobot
+* HDF5
+* Parquet
+
+---
+
+# Future Compatibility
+
+System architecture must support:
+
+* Dual-arm robots
+* Humanoid robots
+* Mobile manipulators
+* VR teleoperation
+* Quest 3 integration
+* Force feedback
+* Shared autonomy
+* Isaac Sim
+* MuJoCo
+* Reinforcement learning
+* Imitation learning
+* Vision-language-action models
+
+No component should be designed in a way that prevents future migration from a single 6DOF arm to a full humanoid robot platform.
+
+---
+
+# Development Requirements
+
+All generated code must include:
+
+* Complete implementation
+* Directory structure
+* Dependencies
+* Configuration files
+* Launch scripts
+* Docker support
+* Logging
+* Error handling
+* Reconnection logic
+* Deployment instructions
+
+Avoid pseudocode.
+
+Produce production-ready implementations whenever possible.

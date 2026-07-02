@@ -1,0 +1,50 @@
+# Global teleoperation system configuration.
+# No hardcoded IPs in code — deployment-specific values live here.
+
+control_hz: 100.0
+dof: 6
+
+# Control-plane transport: "inproc" (local/testing) or "zenoh" (production).
+transport: inproc
+# For zenoh, point at your cloud router so NAT'd leader/follower can rendezvous:
+# transport: zenoh
+# zenoh_endpoint: "tcp/router.example.com:7447"
+zenoh_endpoint: null
+
+session_id: default
+recording_dir: recordings
+
+# Follower arm driver: "mock" (sim, default) or "so101" (real Feetech SO-101).
+follower_arm: mock
+so101_port: /dev/ttyACM0          # follower serial port (override per machine)
+so101_calibration_dir: null        # null -> use the vendored package .cache/*.json
+
+network:
+  warn_latency_ms: 300.0    # ctx.txt: warn operator above this
+  slow_latency_ms: 500.0    # ctx.txt: recommend slower movements above this
+  max_packet_loss: 0.05
+  command_timeout_s: 0.5     # watchdog: comms lost after this with no command
+
+# NOTE: the workspace gate uses a generic mock forward-kinematics model. For the
+# SO-101 the leader sends radians(normalized ±100) targets — not physical joint
+# angles — so that FK is not meaningful and these bounds are kept permissive on
+# purpose; the per-joint limits below are the real guard. Tighten these only for
+# a follower whose joint values are true Cartesian-meaningful angles.
+workspace:
+  x_min: -1.0
+  x_max: 1.0
+  y_min: -1.0
+  y_max: 1.0
+  z_min: -1.0
+  z_max: 1.0
+
+# Radians. SO-101 normalized motor range is ±100 (gripper 0..100), published as
+# radians(value), i.e. ±radians(100) ≈ ±1.745. Soft limits clamp; hard limits
+# (slightly wider, ±radians(110)) latch E-stop.
+joint_limits:
+  # soft slightly above radians(100)=1.7453 so full-range targets don't nuisance-clamp.
+  soft_lower: [-1.75, -1.75, -1.75, -1.75, -1.75,  0.00]
+  soft_upper: [ 1.75,  1.75,  1.75,  1.75,  1.75,  1.75]
+  hard_lower: [-1.92, -1.92, -1.92, -1.92, -1.92, -0.17]
+  hard_upper: [ 1.92,  1.92,  1.92,  1.92,  1.92,  1.92]
+  max_velocity: [3.0, 3.0, 3.0, 3.0, 3.0, 3.0]

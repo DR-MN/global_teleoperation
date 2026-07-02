@@ -86,7 +86,10 @@ class WebSocketVideoPublisher:
         fps = max(self.global_cfg.fps, self.wrist_cfg.fps, 1)
         period = 1.0 / fps
 
-        async with websockets.connect(self.url) as ws:
+        #async with websockets.connect(self.url) as ws:
+        async with websockets.connect(
+            self.url, ping_interval=20, ping_timeout=90, close_timeout=5,
+        ) as ws:
             await ws.send(json.dumps({
                 "type": "join", "role": "follower",
                 "video": {"transport": "websocket", "format": self.format},

@@ -1,6 +1,6 @@
 // WebRTC viewer: requests video from the follower publisher.
 // The viewer creates the offer (recvonly) and the publisher answers with its
-// global + wrist camera tracks; tracks arrive in negotiation order.
+// camera tracks; tracks arrive in negotiation order (camera 0 first).
 
 import { SignalingClient } from "./signaling";
 
@@ -12,7 +12,8 @@ export class VideoViewer {
     private signaling: SignalingClient,
     private iceServers: RTCIceServer[],
     private onTrack: (index: number, stream: MediaStream) => void,
-    private onConnectionState?: (state: RTCPeerConnectionState) => void
+    private onConnectionState?: (state: RTCPeerConnectionState) => void,
+    private numCameras: number = 2
   ) {}
 
   // Begin negotiation with a specific follower publisher peer.
@@ -20,9 +21,12 @@ export class VideoViewer {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers });
     this.pc = pc;
 
-    // Two recvonly transceivers: [0] global, [1] wrist.
-    pc.addTransceiver("video", { direction: "recvonly" });
-    pc.addTransceiver("video", { direction: "recvonly" });
+    // One recvonly transceiver per camera tile. Offering more than the
+    // publisher has is fine — the extra m-lines are answered inactive and
+    // simply never produce a track.
+    for (let i = 0; i < this.numCameras; i++) {
+      pc.addTransceiver("video", { direction: "recvonly" });
+    }
 
     pc.ontrack = (ev) => {
       const idx = this.tracks.length;

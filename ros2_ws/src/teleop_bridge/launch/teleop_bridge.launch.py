@@ -285,6 +285,13 @@ here.
     ros2 launch teleop_bridge teleop_bridge.launch.py side:=both \
         ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo \
         with_camera:=true global_cam_device:=0 gripper_cam_device:=2
+
+    # four cameras (cam3/cam4 start only when a device is given):
+    ros2 launch teleop_bridge teleop_bridge.launch.py side:=follower \
+        ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo \
+        with_camera:=true \
+        global_cam_device:=0 gripper_cam_device:=2 \
+        cam3_device:=4 cam4_device:=6
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -302,13 +309,31 @@ def generate_launch_description() -> LaunchDescription:
     with_camera  = LaunchConfiguration("with_camera")
     global_topic = LaunchConfiguration("global_topic")
     wrist_topic  = LaunchConfiguration("wrist_topic")
+    cam3_topic   = LaunchConfiguration("cam3_topic")
+    cam4_topic   = LaunchConfiguration("cam4_topic")
     global_cam_device  = LaunchConfiguration("global_cam_device")
     gripper_cam_device = LaunchConfiguration("gripper_cam_device")
+    cam3_device        = LaunchConfiguration("cam3_device")
+    cam4_device        = LaunchConfiguration("cam4_device")
     video_transport = LaunchConfiguration("video_transport")
     video_format    = LaunchConfiguration("video_format")
 
     shared_params = [{"transport": transport, "ws_url": ws_url,
                       "zenoh_endpoint": zenoh_ep, "session_id": session}]
+
+    # cam3/cam4 exist only when a device is configured (empty device = skip).
+    cam3_if = IfCondition(PythonExpression(
+        ["'", with_camera, "'.lower() in ('true', '1') and '", cam3_device, "' != ''"]))
+    cam4_if = IfCondition(PythonExpression(
+        ["'", with_camera, "'.lower() in ('true', '1') and '", cam4_device, "' != ''"]))
+
+    # Ordered topic list for the camera bridge: global, wrist, then cam3/cam4
+    # when their devices are set. Track order on the wire follows this order.
+    camera_topics = PythonExpression([
+        "'", global_topic, "' + ',' + '", wrist_topic, "'",
+        " + ((',' + '", cam3_topic, "') if '", cam3_device, "' != '' else '')",
+        " + ((',' + '", cam4_topic, "') if '", cam4_device, "' != '' else '')",
+    ])
 
     return LaunchDescription([
         DeclareLaunchArgument("side", default_value="both",
@@ -330,6 +355,14 @@ def generate_launch_description() -> LaunchDescription:
                               description="global camera: index ('0') or /dev/v4l/by-id/... path"),
         DeclareLaunchArgument("gripper_cam_device", default_value="6",
                               description="gripper camera: index ('1') or /dev/v4l/by-id/... path"),
+        DeclareLaunchArgument("cam3_topic",
+                              default_value="/camera3/color/image_raw"),
+        DeclareLaunchArgument("cam4_topic",
+                              default_value="/camera4/color/image_raw"),
+        DeclareLaunchArgument("cam3_device", default_value="",
+                              description="3rd camera: index or /dev/v4l/by-id/... path ('' = disabled)"),
+        DeclareLaunchArgument("cam4_device", default_value="",
+                              description="4th camera: index or /dev/v4l/by-id/... path ('' = disabled)"),
         DeclareLaunchArgument("video_transport", default_value="webrtc",
                               description="video transport: webrtc | websocket"),
         DeclareLaunchArgument("video_format", default_value="binary",
@@ -386,14 +419,39 @@ def generate_launch_description() -> LaunchDescription:
         ),
         Node(
             package="teleop_bridge",
+            executable="camera_publisher",
+            name="camera3",
+            output="screen",
+            parameters=[{
+                "device": cam3_device,
+                "topic": cam3_topic,
+                "frame_id": "camera3",
+                "width": 640, "height": 480, "fps": 30.0,
+            }],
+            condition=cam3_if,
+        ),
+        Node(
+            package="teleop_bridge",
+            executable="camera_publisher",
+            name="camera4",
+            output="screen",
+            parameters=[{
+                "device": cam4_device,
+                "topic": cam4_topic,
+                "frame_id": "camera4",
+                "width": 640, "height": 480, "fps": 30.0,
+            }],
+            condition=cam4_if,
+        ),
+        Node(
+            package="teleop_bridge",
             executable="camera_bridge",
             name="camera_bridge",
             output="screen",
             parameters=[{
                 "ws_url": ws_url,
                 "session_id": session,
-                "global_topic": global_topic,
-                "wrist_topic": wrist_topic,
+                "camera_topics": camera_topics,
                 "video_transport": video_transport,
                 "video_format": video_format,
             }],

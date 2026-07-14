@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SignalingClient } from "../lib/signaling";
 import { VideoViewer } from "../lib/webrtc";
 import { WsVideoViewer } from "../lib/wsvideo";
@@ -14,6 +14,11 @@ const SIGNALING_URL =
 // without a rebuild — e.g. https://…/?session=demo to match a follower on
 // --session demo.
 const DEFAULT_SESSION = process.env.NEXT_PUBLIC_SESSION || "default";
+
+// One tile per camera; WebRTC track order (and websocket cam id) maps to tile
+// index, so labels follow the follower's camera_topics order.
+const CAMERA_LABELS = ["Global camera", "Wrist camera", "Camera 3", "Camera 4"];
+const NUM_CAMERAS = CAMERA_LABELS.length;
 
 type RobotState = {
   positions?: number[];
@@ -37,13 +42,23 @@ export default function Console() {
   // Which transport the follower advertised: "webrtc" (default) or "websocket".
   const [videoMode, setVideoMode] = useState<"webrtc" | "websocket">("webrtc");
 
-  const globalRef = useRef<HTMLVideoElement>(null);
-  const wristRef = useRef<HTMLVideoElement>(null);
-  const globalCanvasRef = useRef<HTMLCanvasElement>(null);
-  const wristCanvasRef = useRef<HTMLCanvasElement>(null);
+  const videoEls = useRef<(HTMLVideoElement | null)[]>([]);
+  const canvasEls = useRef<(HTMLCanvasElement | null)[]>([]);
   const signalingRef = useRef<SignalingClient | null>(null);
   const viewerRef = useRef<VideoViewer | null>(null);
   const wsViewerRef = useRef<WsVideoViewer | null>(null);
+
+  // Stable RefObject views over the canvas array for WsVideoViewer (it reads
+  // .current lazily, so the getters resolve after the canvases mount).
+  const canvasRefs = useMemo(
+    () =>
+      Array.from({ length: NUM_CAMERAS }, (_, i) => ({
+        get current() {
+          return canvasEls.current[i] ?? null;
+        },
+      })),
+    []
+  );
 
   // Apply ?session= from the URL on the client (after hydration).
   useEffect(() => {
@@ -55,13 +70,13 @@ export default function Console() {
     const peerId = "viewer-" + Math.random().toString(36).slice(2, 8);
 
     const attach = (idx: number, stream: MediaStream) => {
-      const el = idx === 0 ? globalRef.current : wristRef.current;
+      const el = videoEls.current[idx];
       if (el) el.srcObject = stream;
     };
 
     // WebSocket-video renderer (canvases). Frames only arrive when the follower
     // uses the websocket transport, so creating it unconditionally is harmless.
-    wsViewerRef.current = new WsVideoViewer([globalCanvasRef, wristCanvasRef]);
+    wsViewerRef.current = new WsVideoViewer(canvasRefs);
 
     // Connect to a follower using whichever transport it advertised. WebRTC needs
     // us to send an offer; the websocket transport just pushes frames to render.
@@ -78,7 +93,8 @@ export default function Console() {
           sig,
           msg.iceServers || [{ urls: "stun:stun.l.google.com:19302" }],
           attach,
-          (st) => setPeerConn(st)
+          (st) => setPeerConn(st),
+          NUM_CAMERAS
         );
         viewerRef.current = viewer;
         const follower = (msg.peers || []).find((p: any) => p.role === "follower");
@@ -123,34 +139,26 @@ export default function Console() {
       </div>
 
       <div className="videos">
-        <div className="tile">
-          <span className="label">Global camera</span>
-          <video
-            ref={globalRef}
-            autoPlay
-            playsInline
-            muted
-            style={{ display: videoMode === "webrtc" ? "block" : "none" }}
-          />
-          <canvas
-            ref={globalCanvasRef}
-            style={{ display: videoMode === "websocket" ? "block" : "none" }}
-          />
-        </div>
-        <div className="tile">
-          <span className="label">Wrist camera</span>
-          <video
-            ref={wristRef}
-            autoPlay
-            playsInline
-            muted
-            style={{ display: videoMode === "webrtc" ? "block" : "none" }}
-          />
-          <canvas
-            ref={wristCanvasRef}
-            style={{ display: videoMode === "websocket" ? "block" : "none" }}
-          />
-        </div>
+        {CAMERA_LABELS.map((label, i) => (
+          <div className="tile" key={label}>
+            <span className="label">{label}</span>
+            <video
+              ref={(el) => {
+                videoEls.current[i] = el;
+              }}
+              autoPlay
+              playsInline
+              muted
+              style={{ display: videoMode === "webrtc" ? "block" : "none" }}
+            />
+            <canvas
+              ref={(el) => {
+                canvasEls.current[i] = el;
+              }}
+              style={{ display: videoMode === "websocket" ? "block" : "none" }}
+            />
+          </div>
+        ))}
       </div>
 
       <div className="side">

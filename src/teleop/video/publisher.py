@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .camera import CameraConfig, make_camera
 
@@ -111,7 +111,8 @@ class VideoPublisher:
                  global_cfg: Optional[CameraConfig] = None,
                  wrist_cfg: Optional[CameraConfig] = None,
                  global_cam=None,
-                 wrist_cam=None) -> None:
+                 wrist_cam=None,
+                 cameras: Optional[List[Tuple[CameraConfig, object]]] = None) -> None:
         if not _HAVE_WEBRTC:
             raise RuntimeError(
                 "WebRTC deps missing. Install with: pip install -e '.[video]' "
@@ -119,25 +120,29 @@ class VideoPublisher:
             )
         self.url = signaling_url.rstrip("/") + f"/ws/{session_id}/{peer_id}"
         self.peer_id = peer_id
-        self.global_cfg = global_cfg or CameraConfig("global", 1280, 720, 30)
-        self.wrist_cfg = wrist_cfg or CameraConfig("wrist", 640, 480, 30)
-        self._global_cam = global_cam   # pre-built camera instance (e.g. ROS2Camera)
-        self._wrist_cam = wrist_cam
+        # ``cameras`` is the general form: an ordered list of (config, camera)
+        # pairs, one track per entry (camera None -> opened from the config).
+        # Track order on the wire == list order. The global/wrist kwargs remain
+        # as the two-camera shorthand.
+        if cameras is None:
+            cameras = [
+                (global_cfg or CameraConfig("global", 1280, 720, 30), global_cam),
+                (wrist_cfg or CameraConfig("wrist", 640, 480, 30), wrist_cam),
+            ]
+        self._camera_defs = cameras
         self._pcs: Dict[str, "RTCPeerConnection"] = {}
         self._ice_servers: list = []
         self._stop = False
         self._relay = None
-        self._global_src = None
-        self._wrist_src = None
+        self._srcs: list = []
 
     def _ensure_sources(self) -> None:
         if self._relay is None:
             from aiortc.contrib.media import MediaRelay  # type: ignore
             self._relay = MediaRelay()
-            self._global_src = CameraTrack(self.global_cfg, self._global_cam)
-            self._wrist_src = CameraTrack(self.wrist_cfg, self._wrist_cam)
-            log.info("camera sources ready (global=%s, wrist=%s)",
-                     self.global_cfg.name, self.wrist_cfg.name)
+            self._srcs = [CameraTrack(cfg, cam) for cfg, cam in self._camera_defs]
+            log.info("camera sources ready (%s)",
+                     ", ".join(cfg.name for cfg, _ in self._camera_defs))
 
     async def run(self) -> None:
         # aioice schedules STUN retransmits that can fire after a peer's
@@ -209,8 +214,8 @@ class VideoPublisher:
         self._ensure_sources()
         # Subscribe each viewer to the shared camera sources (one open device,
         # many viewers) instead of opening the camera per connection.
-        pc.addTrack(self._relay.subscribe(self._global_src))
-        pc.addTrack(self._relay.subscribe(self._wrist_src))
+        for src in self._srcs:
+            pc.addTrack(self._relay.subscribe(src))
 
         @pc.on("connectionstatechange")
         async def _on_state() -> None:
@@ -241,13 +246,17 @@ def make_video_publisher(signaling_url: str, session_id: str,
                          global_cfg: Optional["CameraConfig"] = None,
                          wrist_cfg: Optional["CameraConfig"] = None,
                          global_cam=None,
-                         wrist_cam=None):
+                         wrist_cam=None,
+                         cameras=None):
     """Build the video publisher for the chosen transport.
 
     ``transport``: ``"webrtc"`` (default, real codec over RTP) or ``"websocket"``
     (JPEG frames over the signaling relay). ``video_format`` (``"binary"`` |
     ``"base64"``) applies only to the websocket transport. Both publishers expose
     the same ``run()`` / ``close()`` interface so call sites are identical.
+
+    ``cameras``: ordered list of (CameraConfig, camera) pairs for N-camera
+    publishing; when given it supersedes the global/wrist two-camera kwargs.
     """
     if transport == "websocket":
         from .ws_publisher import WebSocketVideoPublisher
@@ -255,7 +264,7 @@ def make_video_publisher(signaling_url: str, session_id: str,
             signaling_url, session_id, peer_id,
             global_cfg=global_cfg, wrist_cfg=wrist_cfg,
             global_cam=global_cam, wrist_cam=wrist_cam,
-            video_format=video_format,
+            video_format=video_format, cameras=cameras,
         )
     if transport != "webrtc":
         raise ValueError(f"transport must be 'webrtc' or 'websocket', got {transport!r}")
@@ -263,4 +272,5 @@ def make_video_publisher(signaling_url: str, session_id: str,
         signaling_url, session_id, peer_id,
         global_cfg=global_cfg, wrist_cfg=wrist_cfg,
         global_cam=global_cam, wrist_cam=wrist_cam,
+        cameras=cameras,
     )

@@ -47,7 +47,8 @@ class WebSocketVideoPublisher:
                  global_cam=None,
                  wrist_cam=None,
                  video_format: str = "binary",
-                 jpeg_quality: int = 80) -> None:
+                 jpeg_quality: int = 80,
+                 cameras=None) -> None:
         if not _HAVE_WS_VIDEO:
             raise RuntimeError(
                 "WebSocket video deps missing. Install OpenCV + websockets: "
@@ -63,6 +64,9 @@ class WebSocketVideoPublisher:
         self.wrist_cfg = wrist_cfg or CameraConfig("wrist", 640, 480, 30)
         self._global_cam = global_cam
         self._wrist_cam = wrist_cam
+        # Ordered (config, camera) pairs; cam id on the wire == list index.
+        # Supersedes the global/wrist kwargs when given.
+        self._cameras = cameras
         self._stop = False
 
     async def run(self) -> None:
@@ -79,11 +83,15 @@ class WebSocketVideoPublisher:
     async def _session(self) -> None:
         # (camera id, camera source, config). Reuse a pre-built camera (e.g.
         # ROS2Camera) when provided, else open one from the config.
-        cams = [
-            (0, self._global_cam or make_camera(self.global_cfg), self.global_cfg),
-            (1, self._wrist_cam or make_camera(self.wrist_cfg), self.wrist_cfg),
-        ]
-        fps = max(self.global_cfg.fps, self.wrist_cfg.fps, 1)
+        if self._cameras is not None:
+            cams = [(i, cam if cam is not None else make_camera(cfg), cfg)
+                    for i, (cfg, cam) in enumerate(self._cameras)]
+        else:
+            cams = [
+                (0, self._global_cam or make_camera(self.global_cfg), self.global_cfg),
+                (1, self._wrist_cam or make_camera(self.wrist_cfg), self.wrist_cfg),
+            ]
+        fps = max(max(cfg.fps for _, _, cfg in cams), 1)
         period = 1.0 / fps
 
         #async with websockets.connect(self.url) as ws:

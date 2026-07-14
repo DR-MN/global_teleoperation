@@ -219,7 +219,10 @@ class VideoPublisher:
         # An older viewer that only offers 2 slots just gets the first 2 cameras.
         n_video = msg["sdp"].count("m=video")
         for src in self._srcs[:n_video]:
-            pc.addTrack(self._relay.subscribe(src))
+            # buffered=False: live video wants the newest frame. The default
+            # buffered relay queues frames when the encoder can't keep up, so
+            # latency grows until the stream stalls; unbuffered drops instead.
+            pc.addTrack(self._relay.subscribe(src, buffered=False))
         if n_video < len(self._srcs):
             log.warning("viewer %s offered %d video slot(s) < %d cameras; "
                         "sending the first %d (is the UI up to date?)",

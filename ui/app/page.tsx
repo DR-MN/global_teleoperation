@@ -17,7 +17,12 @@ const DEFAULT_SESSION = process.env.NEXT_PUBLIC_SESSION || "default";
 
 // One tile per camera; WebRTC track order (and websocket cam id) maps to tile
 // index, so labels follow the follower's camera_topics order.
-const CAMERA_LABELS = ["Global camera", "Wrist camera", "Camera 3", "Camera 4"];
+const CAMERA_LABELS = [
+  "Global cam right",
+  "Global cam left",
+  "Gripper cam right",
+  "Gripper cam left",
+];
 const NUM_CAMERAS = CAMERA_LABELS.length;
 
 type RobotState = {

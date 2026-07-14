@@ -278,20 +278,21 @@ here.
     ros2 launch teleop_bridge teleop_bridge.launch.py side:=follower \
         ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo \
         with_camera:=true \
-        global_cam_device:=/dev/v4l/by-id/usb-046d_Webcam_A-video-index0 \
-        gripper_cam_device:=/dev/v4l/by-id/usb-046d_Webcam_B-video-index0
+        global_right_device:=/dev/v4l/by-id/usb-046d_Webcam_A-video-index0 \
+        global_left_device:=/dev/v4l/by-id/usb-046d_Webcam_B-video-index0
 
     # everything on one machine (testing, cameras by index):
     ros2 launch teleop_bridge teleop_bridge.launch.py side:=both \
         ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo \
-        with_camera:=true global_cam_device:=0 gripper_cam_device:=2
+        with_camera:=true global_right_device:=0 global_left_device:=2
 
-    # four cameras (cam3/cam4 start only when a device is given):
+    # four cameras (gripper cams start only when a device is given).
+    # UI tile order: global right, global left, gripper right, gripper left.
     ros2 launch teleop_bridge teleop_bridge.launch.py side:=follower \
         ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo \
         with_camera:=true \
-        global_cam_device:=0 gripper_cam_device:=2 \
-        cam3_device:=4 cam4_device:=6
+        global_right_device:=0 global_left_device:=2 \
+        gripper_right_device:=4 gripper_left_device:=6
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -307,32 +308,33 @@ def generate_launch_description() -> LaunchDescription:
     zenoh_ep     = LaunchConfiguration("zenoh_endpoint")
     session      = LaunchConfiguration("session_id")
     with_camera  = LaunchConfiguration("with_camera")
-    global_topic = LaunchConfiguration("global_topic")
-    wrist_topic  = LaunchConfiguration("wrist_topic")
-    cam3_topic   = LaunchConfiguration("cam3_topic")
-    cam4_topic   = LaunchConfiguration("cam4_topic")
-    global_cam_device  = LaunchConfiguration("global_cam_device")
-    gripper_cam_device = LaunchConfiguration("gripper_cam_device")
-    cam3_device        = LaunchConfiguration("cam3_device")
-    cam4_device        = LaunchConfiguration("cam4_device")
+    global_right_topic  = LaunchConfiguration("global_right_topic")
+    global_left_topic   = LaunchConfiguration("global_left_topic")
+    gripper_right_topic = LaunchConfiguration("gripper_right_topic")
+    gripper_left_topic  = LaunchConfiguration("gripper_left_topic")
+    global_right_device  = LaunchConfiguration("global_right_device")
+    global_left_device   = LaunchConfiguration("global_left_device")
+    gripper_right_device = LaunchConfiguration("gripper_right_device")
+    gripper_left_device  = LaunchConfiguration("gripper_left_device")
     video_transport = LaunchConfiguration("video_transport")
     video_format    = LaunchConfiguration("video_format")
 
     shared_params = [{"transport": transport, "ws_url": ws_url,
                       "zenoh_endpoint": zenoh_ep, "session_id": session}]
 
-    # cam3/cam4 exist only when a device is configured (empty device = skip).
-    cam3_if = IfCondition(PythonExpression(
-        ["'", with_camera, "'.lower() in ('true', '1') and '", cam3_device, "' != ''"]))
-    cam4_if = IfCondition(PythonExpression(
-        ["'", with_camera, "'.lower() in ('true', '1') and '", cam4_device, "' != ''"]))
+    # Gripper cameras exist only when a device is configured (empty = skip).
+    gripper_right_if = IfCondition(PythonExpression(
+        ["'", with_camera, "'.lower() in ('true', '1') and '", gripper_right_device, "' != ''"]))
+    gripper_left_if = IfCondition(PythonExpression(
+        ["'", with_camera, "'.lower() in ('true', '1') and '", gripper_left_device, "' != ''"]))
 
-    # Ordered topic list for the camera bridge: global, wrist, then cam3/cam4
-    # when their devices are set. Track order on the wire follows this order.
+    # Ordered topic list for the camera bridge: global right, global left, then
+    # the gripper cams when their devices are set. Track order on the wire (and
+    # therefore UI tile order) follows this order.
     camera_topics = PythonExpression([
-        "'", global_topic, "' + ',' + '", wrist_topic, "'",
-        " + ((',' + '", cam3_topic, "') if '", cam3_device, "' != '' else '')",
-        " + ((',' + '", cam4_topic, "') if '", cam4_device, "' != '' else '')",
+        "'", global_right_topic, "' + ',' + '", global_left_topic, "'",
+        " + ((',' + '", gripper_right_topic, "') if '", gripper_right_device, "' != '' else '')",
+        " + ((',' + '", gripper_left_topic, "') if '", gripper_left_device, "' != '' else '')",
     ])
 
     return LaunchDescription([
@@ -347,22 +349,22 @@ def generate_launch_description() -> LaunchDescription:
                               description="Zenoh router endpoint, e.g. tcp/router.example.com:7447"),
         DeclareLaunchArgument("with_camera", default_value="false",
                               description="true to also launch the cameras + camera_bridge"),
-        DeclareLaunchArgument("global_topic",
-                              default_value="/global_camera/color/image_raw"),
-        DeclareLaunchArgument("wrist_topic",
-                              default_value="/gripper_camera/color/image_raw"),
-        DeclareLaunchArgument("global_cam_device", default_value="2",
-                              description="global camera: index ('0') or /dev/v4l/by-id/... path"),
-        DeclareLaunchArgument("gripper_cam_device", default_value="6",
-                              description="gripper camera: index ('1') or /dev/v4l/by-id/... path"),
-        DeclareLaunchArgument("cam3_topic",
-                              default_value="/camera3/color/image_raw"),
-        DeclareLaunchArgument("cam4_topic",
-                              default_value="/camera4/color/image_raw"),
-        DeclareLaunchArgument("cam3_device", default_value="",
-                              description="3rd camera: index or /dev/v4l/by-id/... path ('' = disabled)"),
-        DeclareLaunchArgument("cam4_device", default_value="",
-                              description="4th camera: index or /dev/v4l/by-id/... path ('' = disabled)"),
+        DeclareLaunchArgument("global_right_topic",
+                              default_value="/global_right_camera/color/image_raw"),
+        DeclareLaunchArgument("global_left_topic",
+                              default_value="/global_left_camera/color/image_raw"),
+        DeclareLaunchArgument("gripper_right_topic",
+                              default_value="/gripper_right_camera/color/image_raw"),
+        DeclareLaunchArgument("gripper_left_topic",
+                              default_value="/gripper_left_camera/color/image_raw"),
+        DeclareLaunchArgument("global_right_device", default_value="2",
+                              description="global right camera: index ('0') or /dev/v4l/by-id/... path"),
+        DeclareLaunchArgument("global_left_device", default_value="6",
+                              description="global left camera: index ('1') or /dev/v4l/by-id/... path"),
+        DeclareLaunchArgument("gripper_right_device", default_value="",
+                              description="gripper right camera: index or /dev/v4l/by-id/... path ('' = disabled)"),
+        DeclareLaunchArgument("gripper_left_device", default_value="",
+                              description="gripper left camera: index or /dev/v4l/by-id/... path ('' = disabled)"),
         DeclareLaunchArgument("video_transport", default_value="webrtc",
                               description="video transport: webrtc | websocket"),
         DeclareLaunchArgument("video_format", default_value="binary",
@@ -394,12 +396,12 @@ def generate_launch_description() -> LaunchDescription:
         Node(
             package="teleop_bridge",
             executable="camera_publisher",
-            name="global_camera",
+            name="global_right_camera",
             output="screen",
             parameters=[{
-                "device": global_cam_device,
-                "topic": global_topic,
-                "frame_id": "global_camera",
+                "device": global_right_device,
+                "topic": global_right_topic,
+                "frame_id": "global_right_camera",
                 "width": 1280, "height": 720, "fps": 30.0,
             }],
             condition=IfCondition(with_camera),
@@ -407,41 +409,41 @@ def generate_launch_description() -> LaunchDescription:
         Node(
             package="teleop_bridge",
             executable="camera_publisher",
-            name="gripper_camera",
+            name="global_left_camera",
             output="screen",
             parameters=[{
-                "device": gripper_cam_device,
-                "topic": wrist_topic,
-                "frame_id": "gripper_camera",
-                "width": 640, "height": 480, "fps": 30.0,
+                "device": global_left_device,
+                "topic": global_left_topic,
+                "frame_id": "global_left_camera",
+                "width": 1280, "height": 720, "fps": 30.0,
             }],
             condition=IfCondition(with_camera),
         ),
         Node(
             package="teleop_bridge",
             executable="camera_publisher",
-            name="camera3",
+            name="gripper_right_camera",
             output="screen",
             parameters=[{
-                "device": cam3_device,
-                "topic": cam3_topic,
-                "frame_id": "camera3",
+                "device": gripper_right_device,
+                "topic": gripper_right_topic,
+                "frame_id": "gripper_right_camera",
                 "width": 640, "height": 480, "fps": 30.0,
             }],
-            condition=cam3_if,
+            condition=gripper_right_if,
         ),
         Node(
             package="teleop_bridge",
             executable="camera_publisher",
-            name="camera4",
+            name="gripper_left_camera",
             output="screen",
             parameters=[{
-                "device": cam4_device,
-                "topic": cam4_topic,
-                "frame_id": "camera4",
+                "device": gripper_left_device,
+                "topic": gripper_left_topic,
+                "frame_id": "gripper_left_camera",
                 "width": 640, "height": 480, "fps": 30.0,
             }],
-            condition=cam4_if,
+            condition=gripper_left_if,
         ),
         Node(
             package="teleop_bridge",

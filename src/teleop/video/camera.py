@@ -134,6 +134,10 @@ class ROS2Camera:
                     frame = _cv2.cvtColor(frame, _cv2.COLOR_RGB2BGR)
                 except Exception:
                     frame = frame[:, :, ::-1]   # flip channels without cv2
+            elif enc in ("bgra8", "8uc4"):      # e.g. ZED wrapper default
+                frame = frame[:, :, :3]
+            elif enc == "rgba8":
+                frame = frame[:, :, :3][:, :, ::-1]
             elif enc in ("mono8", "8uc1"):
                 frame = np.stack([frame[:, :, 0]] * 3, axis=-1)
             with self._lock:

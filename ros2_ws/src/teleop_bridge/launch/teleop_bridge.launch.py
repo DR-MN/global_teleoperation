@@ -274,31 +274,38 @@ here.
     ros2 launch teleop_bridge teleop_bridge.launch.py side:=follower \
         ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo
 
-    # follower + cameras (robot side); stable by-id device paths:
+    # follower + local USB cameras (a device spawns a camera_publisher for that
+    # view; prefer stable /dev/v4l/by-id/... paths over indices):
     ros2 launch teleop_bridge teleop_bridge.launch.py side:=follower \
         ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo \
         with_camera:=true \
         global_right_device:=/dev/v4l/by-id/usb-046d_Webcam_A-video-index0 \
         global_left_device:=/dev/v4l/by-id/usb-046d_Webcam_B-video-index0
 
-    # everything on one machine (testing, cameras by index):
-    ros2 launch teleop_bridge teleop_bridge.launch.py side:=both \
-        ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo \
-        with_camera:=true global_right_device:=0 global_left_device:=2
-
-    # four cameras (gripper cams start only when a device is given).
+    # four local USB cameras.
     # UI tile order: global right, global left, gripper right, gripper left.
     ros2 launch teleop_bridge teleop_bridge.launch.py side:=follower \
         ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo \
         with_camera:=true \
         global_right_device:=0 global_left_device:=2 \
         gripper_right_device:=4 gripper_left_device:=6
+
+    # externally published topics (e.g. a ZED node): NO devices — just point the
+    # topic args at the existing topics; only camera_bridge is launched:
+    ros2 launch teleop_bridge teleop_bridge.launch.py side:=follower \
+        ws_url:=wss://gt6dof-signaling.onrender.com session_id:=demo \
+        with_camera:=true \
+        global_right_topic:=/zed/zed_node/right/image_rect_color \
+        global_left_topic:=/zed/zed_node/left/image_rect_color \
+        gripper_right_topic:=/zed2/zed_node/right/image_rect_color \
+        gripper_left_topic:=/zed2/zed_node/left/image_rect_color
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -322,19 +329,34 @@ def generate_launch_description() -> LaunchDescription:
     shared_params = [{"transport": transport, "ws_url": ws_url,
                       "zenoh_endpoint": zenoh_ep, "session_id": session}]
 
-    # Gripper cameras exist only when a device is configured (empty = skip).
-    gripper_right_if = IfCondition(PythonExpression(
-        ["'", with_camera, "'.lower() in ('true', '1') and '", gripper_right_device, "' != ''"]))
-    gripper_left_if = IfCondition(PythonExpression(
-        ["'", with_camera, "'.lower() in ('true', '1') and '", gripper_left_device, "' != ''"]))
+    # A local camera_publisher runs only when its device is set. When the topic
+    # is published by something else (e.g. a ZED node), leave the device empty
+    # and just point the topic arg at it — camera_bridge subscribes either way.
+    def _pub_if(device):
+        return IfCondition(PythonExpression(
+            ["'", with_camera, "'.lower() in ('true', '1') and '", device, "' != ''"]))
+
+    global_right_if  = _pub_if(global_right_device)
+    global_left_if   = _pub_if(global_left_device)
+    gripper_right_if = _pub_if(gripper_right_device)
+    gripper_left_if  = _pub_if(gripper_left_device)
+
+    # Gripper topics default to '' (absent). If a device is set without a topic,
+    # the local publisher and the bridge fall back to the canonical topic name.
+    gripper_right_pub_topic = PythonExpression(
+        ["'", gripper_right_topic, "' or '/gripper_right_camera/color/image_raw'"])
+    gripper_left_pub_topic = PythonExpression(
+        ["'", gripper_left_topic, "' or '/gripper_left_camera/color/image_raw'"])
 
     # Ordered topic list for the camera bridge: global right, global left, then
-    # the gripper cams when their devices are set. Track order on the wire (and
-    # therefore UI tile order) follows this order.
+    # each gripper cam when its topic OR device is set. Track order on the wire
+    # (and therefore UI tile order) follows this order.
     camera_topics = PythonExpression([
         "'", global_right_topic, "' + ',' + '", global_left_topic, "'",
-        " + ((',' + '", gripper_right_topic, "') if '", gripper_right_device, "' != '' else '')",
-        " + ((',' + '", gripper_left_topic, "') if '", gripper_left_device, "' != '' else '')",
+        " + ((',' + ('", gripper_right_topic, "' or '/gripper_right_camera/color/image_raw'))"
+        " if ('", gripper_right_topic, "' != '' or '", gripper_right_device, "' != '') else '')",
+        " + ((',' + ('", gripper_left_topic, "' or '/gripper_left_camera/color/image_raw'))"
+        " if ('", gripper_left_topic, "' != '' or '", gripper_left_device, "' != '') else '')",
     ])
 
     return LaunchDescription([
@@ -350,21 +372,27 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("with_camera", default_value="false",
                               description="true to also launch the cameras + camera_bridge"),
         DeclareLaunchArgument("global_right_topic",
-                              default_value="/global_right_camera/color/image_raw"),
+                              default_value="/global_right_camera/color/image_raw",
+                              description="image topic for the global right view (always streamed)"),
         DeclareLaunchArgument("global_left_topic",
-                              default_value="/global_left_camera/color/image_raw"),
-        DeclareLaunchArgument("gripper_right_topic",
-                              default_value="/gripper_right_camera/color/image_raw"),
-        DeclareLaunchArgument("gripper_left_topic",
-                              default_value="/gripper_left_camera/color/image_raw"),
-        DeclareLaunchArgument("global_right_device", default_value="2",
-                              description="global right camera: index ('0') or /dev/v4l/by-id/... path"),
-        DeclareLaunchArgument("global_left_device", default_value="6",
-                              description="global left camera: index ('1') or /dev/v4l/by-id/... path"),
+                              default_value="/global_left_camera/color/image_raw",
+                              description="image topic for the global left view (always streamed)"),
+        DeclareLaunchArgument("gripper_right_topic", default_value="",
+                              description="image topic for the gripper right view ('' = no 3rd camera)"),
+        DeclareLaunchArgument("gripper_left_topic", default_value="",
+                              description="image topic for the gripper left view ('' = no 4th camera)"),
+        DeclareLaunchArgument("global_right_device", default_value="",
+                              description="global right camera: index ('0') or /dev/v4l/by-id/... path "
+                                          "('' = topic published externally, no local publisher)"),
+        DeclareLaunchArgument("global_left_device", default_value="",
+                              description="global left camera: index or /dev/v4l/by-id/... path "
+                                          "('' = topic published externally, no local publisher)"),
         DeclareLaunchArgument("gripper_right_device", default_value="",
-                              description="gripper right camera: index or /dev/v4l/by-id/... path ('' = disabled)"),
+                              description="gripper right camera: index or /dev/v4l/by-id/... path "
+                                          "('' = no local publisher)"),
         DeclareLaunchArgument("gripper_left_device", default_value="",
-                              description="gripper left camera: index or /dev/v4l/by-id/... path ('' = disabled)"),
+                              description="gripper left camera: index or /dev/v4l/by-id/... path "
+                                          "('' = no local publisher)"),
         DeclareLaunchArgument("video_transport", default_value="webrtc",
                               description="video transport: webrtc | websocket"),
         DeclareLaunchArgument("video_format", default_value="binary",
@@ -399,12 +427,14 @@ def generate_launch_description() -> LaunchDescription:
             name="global_right_camera",
             output="screen",
             parameters=[{
-                "device": global_right_device,
+                # ParameterValue(str): a numeric index like '2' must reach the
+                # node as a string, not a yaml-parsed int.
+                "device": ParameterValue(global_right_device, value_type=str),
                 "topic": global_right_topic,
                 "frame_id": "global_right_camera",
                 "width": 1280, "height": 720, "fps": 30.0,
             }],
-            condition=IfCondition(with_camera),
+            condition=global_right_if,
         ),
         Node(
             package="teleop_bridge",
@@ -412,12 +442,12 @@ def generate_launch_description() -> LaunchDescription:
             name="global_left_camera",
             output="screen",
             parameters=[{
-                "device": global_left_device,
+                "device": ParameterValue(global_left_device, value_type=str),
                 "topic": global_left_topic,
                 "frame_id": "global_left_camera",
                 "width": 1280, "height": 720, "fps": 30.0,
             }],
-            condition=IfCondition(with_camera),
+            condition=global_left_if,
         ),
         Node(
             package="teleop_bridge",
@@ -425,8 +455,8 @@ def generate_launch_description() -> LaunchDescription:
             name="gripper_right_camera",
             output="screen",
             parameters=[{
-                "device": gripper_right_device,
-                "topic": gripper_right_topic,
+                "device": ParameterValue(gripper_right_device, value_type=str),
+                "topic": gripper_right_pub_topic,
                 "frame_id": "gripper_right_camera",
                 "width": 640, "height": 480, "fps": 30.0,
             }],
@@ -438,8 +468,8 @@ def generate_launch_description() -> LaunchDescription:
             name="gripper_left_camera",
             output="screen",
             parameters=[{
-                "device": gripper_left_device,
-                "topic": gripper_left_topic,
+                "device": ParameterValue(gripper_left_device, value_type=str),
+                "topic": gripper_left_pub_topic,
                 "frame_id": "gripper_left_camera",
                 "width": 640, "height": 480, "fps": 30.0,
             }],

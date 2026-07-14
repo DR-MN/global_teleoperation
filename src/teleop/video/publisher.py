@@ -214,8 +214,16 @@ class VideoPublisher:
         self._ensure_sources()
         # Subscribe each viewer to the shared camera sources (one open device,
         # many viewers) instead of opening the camera per connection.
-        for src in self._srcs:
+        # Never add more tracks than the offer has video m-lines: aiortc cannot
+        # answer with excess local tracks (ValueError in setLocalDescription).
+        # An older viewer that only offers 2 slots just gets the first 2 cameras.
+        n_video = msg["sdp"].count("m=video")
+        for src in self._srcs[:n_video]:
             pc.addTrack(self._relay.subscribe(src))
+        if n_video < len(self._srcs):
+            log.warning("viewer %s offered %d video slot(s) < %d cameras; "
+                        "sending the first %d (is the UI up to date?)",
+                        viewer, n_video, len(self._srcs), n_video)
 
         @pc.on("connectionstatechange")
         async def _on_state() -> None:

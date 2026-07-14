@@ -396,7 +396,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("video_transport", default_value="webrtc",
                               description="video transport: webrtc | websocket"),
         DeclareLaunchArgument("video_format", default_value="binary",
-                              description="websocket wire format: binary | base64 (ignored for webrtc)"),
+                              description="websocket wire format: binary  | base64 (ignored for webrtc)"),
 
         Node(
             package="teleop_bridge",

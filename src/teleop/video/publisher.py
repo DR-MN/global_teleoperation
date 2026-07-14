@@ -205,6 +205,16 @@ class VideoPublisher:
 
     async def _on_offer(self, ws, msg: dict) -> None:
         viewer = msg["from"]
+        # A re-offer from the same viewer (page refresh, signaling reconnect)
+        # must close the previous connection first: silently replacing it in
+        # _pcs leaves its native encoder running until GC, which can segfault
+        # the process (exit code -11).
+        old = self._pcs.pop(viewer, None)
+        if old is not None:
+            try:
+                await old.close()
+            except Exception:
+                log.debug("closing stale pc for %s failed", viewer)
         config = RTCConfiguration([
             RTCIceServer(**s) for s in (self._ice_servers or
                                         [{"urls": "stun:stun.l.google.com:19302"}])

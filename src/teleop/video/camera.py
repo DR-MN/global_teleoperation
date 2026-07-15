@@ -140,22 +140,41 @@ class ROS2Camera:
                 frame = frame[:, :, :3][:, :, ::-1]
             elif enc in ("mono8", "8uc1"):
                 frame = np.stack([frame[:, :, 0]] * 3, axis=-1)
-            # Cap the stream at the configured width: software VP8 encode cost
-            # scales with pixels, and 4 native-resolution streams can starve the
-            # encoder (frames freeze after a few seconds). Aspect is preserved.
-            h, w = frame.shape[:2]
-            if w > self.cfg.width:
-                try:
-                    import cv2 as _cv2
-                    frame = _cv2.resize(
-                        frame, (self.cfg.width, max(1, round(h * self.cfg.width / w))),
-                        interpolation=_cv2.INTER_AREA)
-                except Exception:
-                    pass   # no cv2 -> stream at native size
-            with self._lock:
-                self._latest = frame
+            self._store(frame)
         except Exception:
             log.exception("ROS2Camera: failed to decode frame on %s", self.cfg.name)
+
+    def on_compressed_image(self, msg) -> None:
+        """ROS2 CompressedImage callback — decode JPEG/PNG bytes to BGR."""
+        try:
+            if np is None:
+                return
+            import cv2 as _cv2
+            buf = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+            frame = _cv2.imdecode(buf, _cv2.IMREAD_COLOR)   # BGR, any source format
+            if frame is None:
+                log.warning("ROS2Camera: undecodable compressed frame on %s (format=%r)",
+                            self.cfg.name, getattr(msg, "format", "?"))
+                return
+            self._store(frame)
+        except Exception:
+            log.exception("ROS2Camera: failed to decode compressed frame on %s", self.cfg.name)
+
+    def _store(self, frame) -> None:
+        # Cap the stream at the configured width: software VP8 encode cost
+        # scales with pixels, and 4 native-resolution streams can starve the
+        # encoder (frames freeze after a few seconds). Aspect is preserved.
+        h, w = frame.shape[:2]
+        if w > self.cfg.width:
+            try:
+                import cv2 as _cv2
+                frame = _cv2.resize(
+                    frame, (self.cfg.width, max(1, round(h * self.cfg.width / w))),
+                    interpolation=_cv2.INTER_AREA)
+            except Exception:
+                pass   # no cv2 -> stream at native size
+        with self._lock:
+            self._latest = frame
 
     def read(self):
         with self._lock:

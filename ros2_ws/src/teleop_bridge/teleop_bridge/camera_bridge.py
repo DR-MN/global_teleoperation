@@ -32,7 +32,7 @@ import threading
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 
 # Must match the camera_publisher QoS (best-effort depth-1) or the topic won't
 # connect and no frames will flow. Latest-frame-wins for live video.
@@ -82,7 +82,13 @@ class CameraBridge(Node):
             w, h = (1280, 720) if i < 2 else (640, 480)
             name = names[i] if i < len(names) else f"cam{i}"
             cam = ROS2Camera(CameraConfig(name, w, h, 30))
-            self.create_subscription(Image, topic, cam.on_image, VIDEO_QOS)
+            # ROS convention: '<topic>/compressed' carries CompressedImage
+            # (JPEG/PNG bytes); anything else is a raw sensor_msgs/Image.
+            if topic.endswith("/compressed"):
+                self.create_subscription(
+                    CompressedImage, topic, cam.on_compressed_image, VIDEO_QOS)
+            else:
+                self.create_subscription(Image, topic, cam.on_image, VIDEO_QOS)
             self.cams.append(cam)
 
         self._publisher = make_video_publisher(

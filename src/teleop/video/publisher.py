@@ -58,11 +58,19 @@ except Exception:  # pragma: no cover - optional deps
 if _HAVE_WEBRTC:
 
     class CameraTrack(VideoStreamTrack):
-        """Wraps a camera source as a WebRTC video track at the configured FPS."""
+        """Wraps a camera source as a WebRTC video track at the configured FPS.
+
+        One instance per viewer, never shared between peer connections: each
+        recv() builds a fresh av.VideoFrame, so no two encoder threads ever
+        touch the same native frame (sharing one frame across viewers is a
+        data race in PyAV/libvpx that segfaults the process). The *camera*
+        may be shared — its read() must be thread-safe and return a copy.
+        """
 
         def __init__(self, cfg: CameraConfig, cam=None) -> None:
             super().__init__()
             self.cfg = cfg
+            self._own_cam = cam is None   # only close devices we opened
             self.cam = cam if cam is not None else make_camera(cfg)
 
         async def recv(self):
@@ -75,7 +83,8 @@ if _HAVE_WEBRTC:
 
         def stop(self) -> None:  # type: ignore[override]
             super().stop()
-            self.cam.close()
+            if self._own_cam:
+                self.cam.close()
 
 
 def _quiet_ice_teardown(loop, context: dict) -> None:
@@ -95,6 +104,7 @@ def _quiet_ice_teardown(loop, context: dict) -> None:
         "sendto", "call_exception_handler",          # post-close transport
         "TransactionTimeout",                          # losing TURN/STUN pair
         "socket.send() raised exception",              # torn-down UDP socket
+        "RTCIceTransport is closed",                   # pc closed mid-ICE (re-offer)
     )
     if any(token in text for token in benign):
         log.debug("suppressed ICE/TURN teardown noise: %s", text.strip())
@@ -131,16 +141,22 @@ class VideoPublisher:
             ]
         self._camera_defs = cameras
         self._pcs: Dict[str, "RTCPeerConnection"] = {}
+        self._tracks: Dict[str, list] = {}   # viewer -> its CameraTracks
         self._ice_servers: list = []
         self._stop = False
-        self._relay = None
-        self._srcs: list = []
+        self._cams: Optional[list] = None    # [(cfg, camera)] shared by viewers
+        self._owned_cams: list = []          # cameras we opened -> we close
 
-    def _ensure_sources(self) -> None:
-        if self._relay is None:
-            from aiortc.contrib.media import MediaRelay  # type: ignore
-            self._relay = MediaRelay()
-            self._srcs = [CameraTrack(cfg, cam) for cfg, cam in self._camera_defs]
+    def _ensure_cameras(self) -> None:
+        """Open each camera once; viewers get their own tracks over these
+        shared sources (one open device, many viewers)."""
+        if self._cams is None:
+            self._cams = []
+            for cfg, cam in self._camera_defs:
+                if cam is None:
+                    cam = make_camera(cfg)
+                    self._owned_cams.append(cam)
+                self._cams.append((cfg, cam))
             log.info("camera sources ready (%s)",
                      ", ".join(cfg.name for cfg, _ in self._camera_defs))
 
@@ -199,50 +215,62 @@ class VideoPublisher:
                 cand.sdpMLineIndex = cand_info.get("sdpMLineIndex")
                 await pc.addIceCandidate(cand)
         elif mtype == "peer-left":
-            pc = self._pcs.pop(msg.get("peer_id"), None)
-            if pc:
+            await self._teardown_viewer(msg.get("peer_id"))
+
+    async def _teardown_viewer(self, viewer) -> None:
+        """Fully release one viewer: stop its tracks (so their sender loops
+        exit and no encoder is fed a frame mid-close), then close the pc.
+        Idempotent — safe to call from re-offer, peer-left, state change and
+        shutdown in any order."""
+        pc = self._pcs.pop(viewer, None)
+        for track in self._tracks.pop(viewer, []):
+            track.stop()
+        if pc is not None:
+            try:
                 await pc.close()
+            except Exception:
+                log.debug("closing pc for %s failed", viewer)
 
     async def _on_offer(self, ws, msg: dict) -> None:
         viewer = msg["from"]
         # A re-offer from the same viewer (page refresh, signaling reconnect)
-        # must close the previous connection first: silently replacing it in
-        # _pcs leaves its native encoder running until GC, which can segfault
-        # the process (exit code -11).
-        old = self._pcs.pop(viewer, None)
-        if old is not None:
-            try:
-                await old.close()
-            except Exception:
-                log.debug("closing stale pc for %s failed", viewer)
+        # must tear down the previous connection first: silently replacing it
+        # in _pcs leaves its native encoders running until GC, which can
+        # segfault the process (exit code -11).
+        await self._teardown_viewer(viewer)
         config = RTCConfiguration([
             RTCIceServer(**s) for s in (self._ice_servers or
                                         [{"urls": "stun:stun.l.google.com:19302"}])
         ])
         pc = RTCPeerConnection(config)
         self._pcs[viewer] = pc
-        self._ensure_sources()
-        # Subscribe each viewer to the shared camera sources (one open device,
-        # many viewers) instead of opening the camera per connection.
+        self._ensure_cameras()
+        # Fresh CameraTrack per viewer over the shared cameras: tracks (and
+        # the av.VideoFrames they produce) must never be shared between peer
+        # connections — concurrent encoders on one frame is a native data
+        # race (SIGSEGV in vpx encode). Each track pulls the newest frame
+        # from its camera on recv(), so viewers stay live with no buffering.
         # Never add more tracks than the offer has video m-lines: aiortc cannot
         # answer with excess local tracks (ValueError in setLocalDescription).
         # An older viewer that only offers 2 slots just gets the first 2 cameras.
         n_video = msg["sdp"].count("m=video")
-        for src in self._srcs[:n_video]:
-            # buffered=False: live video wants the newest frame. The default
-            # buffered relay queues frames when the encoder can't keep up, so
-            # latency grows until the stream stalls; unbuffered drops instead.
-            pc.addTrack(self._relay.subscribe(src, buffered=False))
-        if n_video < len(self._srcs):
+        tracks = [CameraTrack(cfg, cam) for cfg, cam in self._cams[:n_video]]
+        self._tracks[viewer] = tracks
+        for track in tracks:
+            pc.addTrack(track)
+        if n_video < len(self._cams):
             log.warning("viewer %s offered %d video slot(s) < %d cameras; "
                         "sending the first %d (is the UI up to date?)",
-                        viewer, n_video, len(self._srcs), n_video)
+                        viewer, n_video, len(self._cams), n_video)
 
         @pc.on("connectionstatechange")
         async def _on_state() -> None:
             log.info("viewer %s connection: %s", viewer, pc.connectionState)
-            if pc.connectionState in ("failed", "closed"):
-                self._pcs.pop(viewer, None)
+            # Guard: a late 'closed' from a pc we already replaced (page
+            # refresh) must not tear down the viewer's *new* connection.
+            if pc.connectionState in ("failed", "closed") \
+                    and self._pcs.get(viewer) is pc:
+                await self._teardown_viewer(viewer)
 
         await pc.setRemoteDescription(
             RTCSessionDescription(sdp=msg["sdp"], type="offer"))
@@ -255,9 +283,12 @@ class VideoPublisher:
 
     async def close(self) -> None:
         self._stop = True
-        for pc in list(self._pcs.values()):
-            await pc.close()
-        self._pcs.clear()
+        for viewer in list(self._pcs):
+            await self._teardown_viewer(viewer)
+        for cam in self._owned_cams:
+            cam.close()
+        self._owned_cams.clear()
+        self._cams = None
 
 
 def make_video_publisher(signaling_url: str, session_id: str,
